@@ -244,3 +244,18 @@ groot/control/envs/yam/data/eval/*
 
 checkpoints/
 video_pred_output*/
+
+# Isaac/DreamZero local data
+/data/
+/datasets/
+/checkpoints/
+/outputs/
+/logs/
+/wandb/
+/tmp_isaac_debug/
+*.mp4
+*.parquet
+*.tar
+*.pt
+*.pth
+*.safetensors
