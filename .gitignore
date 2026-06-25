@@ -246,7 +246,6 @@ checkpoints/
 video_pred_output*/
 
 # Isaac/DreamZero local data
-/data/
 /datasets/
 /checkpoints/
 /outputs/

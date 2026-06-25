@@ -147,6 +147,11 @@ class EmbodimentTag(Enum):
     The GR1 Isaac dataset (Shiwei).
     """
 
+    ISAAC_VLN = "isaac_vln"
+    """
+    The MAS-VLN Isaac Sim multi-robot navigation dataset.
+    """
+
     LAPA = "lapa"
     """
     The datasets with LAPA actions.
