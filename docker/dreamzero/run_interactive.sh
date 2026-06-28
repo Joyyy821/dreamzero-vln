@@ -6,7 +6,7 @@ IMAGE_TAG=${IMAGE_TAG:-latest}
 
 # Host paths
 HOST_WORKSPACE=${HOST_WORKSPACE:-$HOME/workspace}
-HOST_DATA_ROOT=${HOST_DATA_ROOT:-/data/$USER}
+HOST_DATA_ROOT=${HOST_DATA_ROOT:-/data/$USER/dream-mapf}
 
 # Container paths
 CONTAINER_WORKSPACE=/workspace
@@ -21,6 +21,8 @@ mkdir -p "$HOST_DATA_ROOT/cache/torch"
 mkdir -p "$HOST_DATA_ROOT/cache/wandb"
 
 docker run --rm -it \
+  --name yjiao-dreamzero-dev \
+  --label owner=yangjiao \
   --gpus all \
   --ipc=host \
   --shm-size=64g \
