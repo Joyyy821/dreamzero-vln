@@ -58,31 +58,31 @@ python scripts/data/convert_lerobot_to_gear.py \
 
 ### Arguments
 
-| Argument | Default | Description |
-|---|---|---|
-| `--dataset-path` | *(required)* | Path to the LeRobot v2 dataset |
-| `--output-path` | *(in-place)* | Write to a different directory instead of in-place |
-| `--embodiment-tag` | `xdof` | Tag for `meta/embodiment.json`; must match the key you use in Step 3 |
-| `--state-keys` | *(auto)* | JSON: sub-key name → `[start, end]` index range |
-| `--action-keys` | *(auto)* | JSON: sub-key name → `[start, end]` index range |
-| `--relative-action-keys` | *(none)* | Sub-key names to compute relative action stats for |
-| `--task-key` | *(auto)* | Column name for language/task annotations |
-| `--fps` | *(from info.json)* | Override dataset FPS |
-| `--action-horizon` | `24` | Horizon for relative stats computation |
-| `--force` | `false` | Overwrite existing metadata files |
+| Argument                   | Default              | Description                                                           |
+| -------------------------- | -------------------- | --------------------------------------------------------------------- |
+| `--dataset-path`         | *(required)*       | Path to the LeRobot v2 dataset                                        |
+| `--output-path`          | *(in-place)*       | Write to a different directory instead of in-place                    |
+| `--embodiment-tag`       | `xdof`             | Tag for`meta/embodiment.json`; must match the key you use in Step 3 |
+| `--state-keys`           | *(auto)*           | JSON: sub-key name →`[start, end]` index range                     |
+| `--action-keys`          | *(auto)*           | JSON: sub-key name →`[start, end]` index range                     |
+| `--relative-action-keys` | *(none)*           | Sub-key names to compute relative action stats for                    |
+| `--task-key`             | *(auto)*           | Column name for language/task annotations                             |
+| `--fps`                  | *(from info.json)* | Override dataset FPS                                                  |
+| `--action-horizon`       | `24`               | Horizon for relative stats computation                                |
+| `--force`                | `false`            | Overwrite existing metadata files                                     |
 
 ### Generated files
 
 The converter creates these under `meta/`:
 
-| File | Contents |
-|---|---|
-| `modality.json` | Maps state, action, video, and annotation keys with index ranges and dtypes |
-| `embodiment.json` | `{"embodiment_tag": "<EMBODIMENT>"}` |
-| `stats.json` | Per-feature statistics (mean, std, min, max, q01, q99) |
-| `relative_stats_dreamzero.json` | Relative action statistics (action − reference state) |
-| `tasks.jsonl` | Unique task descriptions |
-| `episodes.jsonl` | Per-episode metadata (index, tasks, length) |
+| File                              | Contents                                                                    |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| `modality.json`                 | Maps state, action, video, and annotation keys with index ranges and dtypes |
+| `embodiment.json`               | `{"embodiment_tag": "<EMBODIMENT>"}`                                      |
+| `stats.json`                    | Per-feature statistics (mean, std, min, max, q01, q99)                      |
+| `relative_stats_dreamzero.json` | Relative action statistics (action − reference state)                      |
+| `tasks.jsonl`                   | Unique task descriptions                                                    |
+| `episodes.jsonl`                | Per-episode metadata (index, tasks, length)                                 |
 
 ---
 
@@ -136,12 +136,12 @@ Edit `groot/vla/configs/data/dreamzero/base_48_wan_fine_aug_relative.yaml`.
 
 The YAML config must reference **exactly these key names** with type prefixes:
 
-| Modality | YAML key format | Example |
-|---|---|---|
-| State | `state.<name>` | `state.joint_pos` |
-| Action | `action.<name>` | `action.joint_pos` |
-| Video | `video.<name>` | `video.cam0` |
-| Language | `annotation.<name>` | `annotation.task` |
+| Modality | YAML key format       | Example              |
+| -------- | --------------------- | -------------------- |
+| State    | `state.<name>`      | `state.joint_pos`  |
+| Action   | `action.<name>`     | `action.joint_pos` |
+| Video    | `video.<name>`      | `video.cam0`       |
+| Language | `annotation.<name>` | `annotation.task`  |
 
 If the YAML keys don't match `modality.json`, training will fail with missing-key errors.
 
@@ -405,15 +405,15 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
 
 ### Key parameters to adjust per embodiment
 
-| Parameter | Default | When to change |
-|---|---|---|
-| `num_views` | `3` | Number of cameras your robot has |
-| `action_horizon` | `24` | Must match the number of action `delta_indices` |
-| `num_frames` | `33` | Must be `len(video delta_indices) + num_frame_per_block * (blocks - 1)` |
-| `image_resolution_width` | `320` | Match your camera resolution (or desired resize) |
-| `image_resolution_height` | `176` | Match your camera resolution (or desired resize) |
-| `max_steps` | `100000` | Scale with dataset size |
-| `per_device_train_batch_size` | `4` | Adjust for GPU memory |
+| Parameter                       | Default    | When to change                                                           |
+| ------------------------------- | ---------- | ------------------------------------------------------------------------ |
+| `num_views`                   | `3`      | Number of cameras your robot has                                         |
+| `action_horizon`              | `24`     | Must match the number of action`delta_indices`                         |
+| `num_frames`                  | `33`     | Must be`len(video delta_indices) + num_frame_per_block * (blocks - 1)` |
+| `image_resolution_width`      | `320`    | Match your camera resolution (or desired resize)                         |
+| `image_resolution_height`     | `176`    | Match your camera resolution (or desired resize)                         |
+| `max_steps`                   | `100000` | Scale with dataset size                                                  |
+| `per_device_train_batch_size` | `4`      | Adjust for GPU memory                                                    |
 
 ---
 
@@ -462,10 +462,10 @@ DATA_ROOT=/path/to/your_dataset OUTPUT_DIR=./checkpoints/run1 NUM_GPUS=4 \
 
 ## Quick Reference: Existing Embodiments
 
-| Embodiment | Data Config | Layout |
-|---|---|---|
-| `oxe_droid` | `droid_relative.yaml` | 3 cameras, joint_position + gripper_position |
-| `agibot` | `agibot_relative.yaml` | 3 cameras, 6 state keys, 7 action keys |
-| `yam` | `yam_relative.yaml` | 3 cameras (top/left/right), bimanual left/right joint_pos + gripper_pos |
+| Embodiment    | Data Config              | Layout                                                                  |
+| ------------- | ------------------------ | ----------------------------------------------------------------------- |
+| `oxe_droid` | `droid_relative.yaml`  | 3 cameras, joint_position + gripper_position                            |
+| `agibot`    | `agibot_relative.yaml` | 3 cameras, 6 state keys, 7 action keys                                  |
+| `yam`       | `yam_relative.yaml`    | 3 cameras (top/left/right), bimanual left/right joint_pos + gripper_pos |
 
 Use these as concrete examples when building your own config.

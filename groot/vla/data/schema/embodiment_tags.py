@@ -150,6 +150,27 @@ class EmbodimentTag(Enum):
     ISAAC_VLN = "isaac_vln"
     """
     The MAS-VLN Isaac Sim multi-robot navigation dataset.
+    Note: this is the old embodiment tag that ignores ego robot type
+    """
+
+    NOVA_CARTER = "nova_carter"
+    """
+    The Nova Carter robot in MAS-VLN Isaac Sim navigation data.
+    """
+
+    CARTER_V1 = "carter_v1"
+    """
+    The Carter v1 robot in MAS-VLN Isaac Sim navigation data.
+    """
+
+    JACKAL = "jackal"
+    """
+    The Jackal robot in MAS-VLN Isaac Sim navigation data.
+    """
+
+    LIMO = "limo"
+    """
+    The Limo robot in MAS-VLN Isaac Sim navigation data.
     """
 
     LAPA = "lapa"

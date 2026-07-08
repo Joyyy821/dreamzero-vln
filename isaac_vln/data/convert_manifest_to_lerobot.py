@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert MAS-VLN Isaac Sim rollout metadata to a small LeRobot debug dataset."""
+"""Convert MAS-VLN Isaac Sim rollout metadata to LeRobot datasets."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 import math
 import shutil
 import subprocess
+import sys
 import tarfile
 from bisect import bisect_right
 from dataclasses import dataclass
@@ -24,7 +25,9 @@ from PIL import Image
 DEFAULT_DATASET_ROOT = Path("/home/yjiao/Datasets/ma_vln_isaac_sim_hf")
 DEFAULT_SCENE_ID = 1
 DEFAULT_ROLLOUT_ID = 3
-DEFAULT_EGO_AGENTS = ("carter_v1", "nova_carter")
+DEFAULT_EGO_AGENTS = ("nova_carter",)
+DEFAULT_DEBUG_MAX_EPISODES = 2
+DEFAULT_DEBUG_MAX_STEPS = 300
 
 STATE_EGO_KEYS = ("v", "omega")
 STATE_GOAL_KEYS = ("dx_goal_body", "dy_goal_body", "dtheta_goal")
@@ -58,6 +61,7 @@ class EpisodeResult:
     scene_id: int
     rollout_id: int
     ego_agent: str
+    embodiment_tag: str
     split: str
     instruction: str
     length: int
@@ -243,25 +247,104 @@ def read_manifest_jsonl(path: Path, fallback_dataset_root: Path) -> list[Manifes
     return entries
 
 
+def build_embodiment_manifest_entries(
+    *,
+    dataset_root: Path,
+    embodiment: str,
+    rollouts: pd.DataFrame,
+    third_view_cameras: Sequence[str] | None,
+    split_override: str | None,
+    scene_id: int | None = None,
+    rollout_id: int | None = None,
+) -> list[ManifestEntry]:
+    """Build one per-ego entry for every packaged rollout containing an embodiment."""
+    embodiment = str(embodiment).strip()
+    if not embodiment:
+        raise ValueError("--embodiment must be non-empty")
+
+    rows = rollouts.copy()
+    if "success" in rows.columns:
+        rows = rows[rows["success"].astype(bool)]
+    if "package_status" in rows.columns:
+        rows = rows[rows["package_status"].astype(str) == "packaged"]
+    if scene_id is not None:
+        rows = rows[rows["scene_id"] == int(scene_id)]
+    if rollout_id is not None:
+        rows = rows[rows["rollout_id"] == int(rollout_id)]
+    rows = rows.sort_values(["scene_id", "rollout_id"], kind="stable")
+
+    entries: list[ManifestEntry] = []
+    for row in rows.to_dict(orient="records"):
+        robot_names = _json_list(row.get("robot_names"))
+        robot_models = _json_list(row.get("robot_models"))
+        if len(robot_models) < len(robot_names):
+            robot_models.extend(robot_names[len(robot_models) :])
+        for robot_name, robot_model in zip(robot_names, robot_models):
+            if embodiment not in {str(robot_name), str(robot_model)}:
+                continue
+            entries.append(
+                ManifestEntry(
+                    dataset_root=dataset_root,
+                    scene_id=int(row["scene_id"]),
+                    rollout_id=int(row["rollout_id"]),
+                    ego_agent=str(robot_name),
+                    third_view_cameras=tuple(third_view_cameras or ()),
+                    split=str(split_override or row.get("split") or "train"),
+                )
+            )
+
+    if not entries:
+        available = ", ".join(available_embodiments_from_rollouts(rollouts)) or "none"
+        raise ValueError(
+            f"No packaged rollout entries found for embodiment {embodiment!r}. "
+            f"Available embodiments: {available}"
+        )
+    return entries
+
+
+def available_embodiments_from_rollouts(rollouts: pd.DataFrame) -> list[str]:
+    embodiments: set[str] = set()
+    for row in rollouts.to_dict(orient="records"):
+        for value in _json_list(row.get("robot_models")):
+            if str(value):
+                embodiments.add(str(value))
+        for value in _json_list(row.get("robot_names")):
+            if str(value):
+                embodiments.add(str(value))
+    return sorted(embodiments)
+
+
 def convert_dataset(
     entries: Sequence[ManifestEntry],
     out_root: Path,
     *,
-    max_episodes: int,
-    max_steps: int,
+    max_episodes: int | None,
+    max_steps: int | None,
     requested_fps: float | None,
     image_width: int | None,
     image_height: int | None,
     overwrite: bool,
 ) -> dict[str, Any]:
-    if max_episodes <= 0:
+    if max_episodes is not None and max_episodes <= 0:
         raise ValueError("--max-episodes must be positive")
-    if max_steps <= 0:
+    if max_steps is not None and max_steps <= 0:
         raise ValueError("--max-steps must be positive")
 
-    entries = list(entries)[:max_episodes]
+    entries = list(entries)
+    if max_episodes is not None:
+        entries = entries[:max_episodes]
     if not entries:
         raise ValueError("No conversion entries selected")
+
+    roots = {entry.dataset_root.expanduser().resolve() for entry in entries}
+    metadata_cache = {root: _load_release_metadata(root) for root in roots}
+    run_config_cache: dict[tuple[Path, int, int], dict[str, Any]] = {}
+
+    max_team_slots = _infer_max_team_slots(entries, metadata_cache, run_config_cache)
+    agent_type_ids = _infer_agent_type_ids(entries, metadata_cache, run_config_cache)
+    embodiment_tag = _single_embodiment_tag(
+        _infer_ego_embodiment_tags(entries, metadata_cache, run_config_cache)
+    )
 
     out_root = out_root.expanduser()
     if out_root.exists():
@@ -270,13 +353,6 @@ def convert_dataset(
         elif any(out_root.iterdir()):
             raise FileExistsError(f"Output root already exists and is not empty: {out_root}")
     (out_root / "meta").mkdir(parents=True, exist_ok=True)
-
-    roots = {entry.dataset_root.expanduser().resolve() for entry in entries}
-    metadata_cache = {root: _load_release_metadata(root) for root in roots}
-    run_config_cache: dict[tuple[Path, int, int], dict[str, Any]] = {}
-
-    max_team_slots = _infer_max_team_slots(entries, metadata_cache, run_config_cache)
-    agent_type_ids = _infer_agent_type_ids(entries, metadata_cache, run_config_cache)
 
     tasks: dict[str, int] = {}
     all_results: list[EpisodeResult] = []
@@ -301,7 +377,14 @@ def convert_dataset(
         global_row_index += result.length
         all_results.append(result)
 
-    _write_meta_files(out_root, all_results, tasks, max_team_slots, agent_type_ids)
+    _write_meta_files(
+        out_root,
+        all_results,
+        tasks,
+        max_team_slots,
+        agent_type_ids,
+        embodiment_tag=embodiment_tag,
+    )
 
     summary = {
         "out_root": str(out_root),
@@ -310,6 +393,7 @@ def convert_dataset(
         "state_dim": all_results[0].state_dim,
         "action_dim": all_results[0].action_dim,
         "video_keys": list(all_results[0].video_keys),
+        "embodiment_tag": embodiment_tag,
         "tasks": tasks,
     }
     return summary
@@ -325,7 +409,7 @@ def _build_episode(
     run_config_cache: dict[tuple[Path, int, int], dict[str, Any]],
     max_team_slots: int,
     agent_type_ids: Mapping[str, int],
-    max_steps: int,
+    max_steps: int | None,
     requested_fps: float | None,
     image_width: int | None,
     image_height: int | None,
@@ -351,6 +435,7 @@ def _build_episode(
         name: str(robot_by_name[name].get("model") or name)
         for name in robot_order
     }
+    embodiment_tag = _robot_embodiment_tag(robot_by_name[entry.ego_agent], entry.ego_agent)
 
     third_view_cameras = entry.third_view_cameras or _default_third_view_cameras(frames)
     if not third_view_cameras:
@@ -448,6 +533,7 @@ def _build_episode(
         scene_id=entry.scene_id,
         rollout_id=entry.rollout_id,
         ego_agent=entry.ego_agent,
+        embodiment_tag=embodiment_tag,
         split=entry.split or str(rollout_row.get("split") or "train"),
         instruction=instruction,
         length=len(rows),
@@ -567,7 +653,16 @@ def _write_meta_files(
     tasks: Mapping[str, int],
     max_team_slots: int,
     agent_type_ids: Mapping[str, int],
+    *,
+    embodiment_tag: str,
 ) -> None:
+    result_tags = {result.embodiment_tag for result in results}
+    if result_tags != {embodiment_tag}:
+        raise ValueError(
+            f"Converted episodes have mixed embodiment tags {sorted(result_tags)}; "
+            "write one ego embodiment per LeRobot/GEAR dataset for v1."
+        )
+
     meta_dir = out_root / "meta"
     meta_dir.mkdir(parents=True, exist_ok=True)
 
@@ -591,6 +686,7 @@ def _write_meta_files(
                         "scene_id": result.scene_id,
                         "rollout_id": result.rollout_id,
                         "ego_agent": result.ego_agent,
+                        "embodiment_tag": result.embodiment_tag,
                         "split": result.split,
                     }
                 )
@@ -619,7 +715,7 @@ def _write_meta_files(
     split_ranges = _build_split_ranges(results)
     info = {
         "codebase_version": "v2.0",
-        "robot_type": "isaac_vln",
+        "robot_type": embodiment_tag,
         "total_episodes": len(results),
         "total_frames": total_frames,
         "total_tasks": len(tasks),
@@ -665,6 +761,7 @@ def _write_meta_files(
         "action_keys": action_key_slices(),
         "state_names": _state_names(max_team_slots),
         "action_names": list(ACTION_KEYS),
+        "embodiment_tag": embodiment_tag,
         "max_team_slots": max_team_slots,
         "agent_type_ids": dict(sorted(agent_type_ids.items(), key=lambda item: item[1])),
         "gear_command_hint": {
@@ -672,7 +769,7 @@ def _write_meta_files(
             "action_keys": json.dumps(action_key_slices(), sort_keys=True),
             "relative_action_keys": [],
             "task_key": "annotation.task",
-            "embodiment_tag": "isaac_vln",
+            "embodiment_tag": embodiment_tag,
         },
         "episodes": [
             {
@@ -680,6 +777,7 @@ def _write_meta_files(
                 "scene_id": result.scene_id,
                 "rollout_id": result.rollout_id,
                 "ego_agent": result.ego_agent,
+                "embodiment_tag": result.embodiment_tag,
                 "split": result.split,
                 "length": result.length,
                 "fps": result.fps,
@@ -787,6 +885,57 @@ def _infer_agent_type_ids(
             name = str(robot.get("name") or "")
             models.add(str(robot.get("model") or name))
     return {model: idx for idx, model in enumerate(sorted(models))}
+
+
+def _infer_ego_embodiment_tags(
+    entries: Sequence[ManifestEntry],
+    metadata_cache: Mapping[Path, dict[str, pd.DataFrame]],
+    run_config_cache: dict[tuple[Path, int, int], dict[str, Any]],
+) -> list[str]:
+    tags: list[str] = []
+    for entry in entries:
+        dataset_root = entry.dataset_root.expanduser().resolve()
+        rollout_row = _select_rollout_row(
+            metadata_cache[dataset_root]["rollouts"],
+            entry.scene_id,
+            entry.rollout_id,
+        )
+        run_config = _load_run_config(
+            dataset_root,
+            entry.scene_id,
+            entry.rollout_id,
+            dataset_root / str(rollout_row["tar_path"]),
+            run_config_cache,
+        )
+        robot_entries = list(((run_config.get("team_config") or {}).get("robots") or []))
+        robot_by_name = {str(robot.get("name") or ""): robot for robot in robot_entries}
+        if entry.ego_agent not in robot_by_name:
+            raise ValueError(
+                f"Ego agent {entry.ego_agent!r} is not in rollout robots {sorted(robot_by_name)}"
+            )
+        tags.append(_robot_embodiment_tag(robot_by_name[entry.ego_agent], entry.ego_agent))
+    return tags
+
+
+def _robot_embodiment_tag(robot_entry: Mapping[str, Any], fallback_name: str) -> str:
+    tag = str(robot_entry.get("model") or fallback_name).strip()
+    if not tag:
+        raise ValueError(f"Could not infer embodiment tag for ego agent {fallback_name!r}")
+    return tag
+
+
+def _single_embodiment_tag(tags: Sequence[str]) -> str:
+    unique = sorted({str(tag) for tag in tags})
+    if not unique:
+        raise ValueError("No ego embodiment tags inferred")
+    if len(unique) > 1:
+        raise ValueError(
+            "V1 debug conversion requires one controlled ego embodiment per output dataset. "
+            f"Selected ego agents resolve to multiple embodiment tags: {unique}. "
+            "Run the converter once per ego robot type, for example with "
+            "--ego-agents nova_carter, then --ego-agents carter_v1."
+        )
+    return unique[0]
 
 
 def _load_release_metadata(dataset_root: Path) -> dict[str, pd.DataFrame]:
@@ -919,7 +1068,7 @@ def select_timestamps(
     timestamps_ns: Sequence[int],
     *,
     fps: float | None,
-    max_steps: int,
+    max_steps: int | None,
 ) -> list[int]:
     timestamps = [int(value) for value in sorted(timestamps_ns)]
     if fps is not None:
@@ -934,6 +1083,8 @@ def select_timestamps(
                 selected.append(timestamp)
                 last_ts = timestamp
         timestamps = selected
+    if max_steps is None:
+        return timestamps
     return timestamps[:max_steps]
 
 
@@ -950,6 +1101,22 @@ def _required_float(sample: Mapping[str, Any], key: str) -> float:
     return number
 
 
+def _json_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parsed = json.loads(value)
+    else:
+        parsed = value
+    if isinstance(parsed, np.ndarray):
+        return parsed.tolist()
+    if isinstance(parsed, tuple):
+        return list(parsed)
+    if isinstance(parsed, list):
+        return parsed
+    raise ValueError(f"Expected JSON/list value, got {type(value).__name__}: {value!r}")
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as stream:
         json.dump(payload, stream, indent=2, sort_keys=True)
@@ -958,23 +1125,63 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Convert MAS-VLN packaged Isaac Sim rollouts to a LeRobot debug dataset."
+        description="Convert MAS-VLN packaged Isaac Sim rollouts to a LeRobot dataset."
     )
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT)
     parser.add_argument("--manifest", type=Path, default=None, help="Optional JSONL manifest.")
     parser.add_argument("--out-root", type=Path, required=True)
-    parser.add_argument("--scene-id", type=int, default=DEFAULT_SCENE_ID)
-    parser.add_argument("--rollout-id", type=int, default=DEFAULT_ROLLOUT_ID)
+    parser.add_argument(
+        "--embodiment",
+        default=None,
+        help=(
+            "Convert every packaged rollout containing this controlled ego robot model/name "
+            "(for example nova_carter, carter_v1, jackal, or limo)."
+        ),
+    )
+    parser.add_argument(
+        "--scene-id",
+        type=int,
+        default=None,
+        help=(
+            "Optional scene filter. In debug mode, defaults to "
+            f"{DEFAULT_SCENE_ID}; in --embodiment mode, omitted means all scenes."
+        ),
+    )
+    parser.add_argument(
+        "--rollout-id",
+        type=int,
+        default=None,
+        help=(
+            "Optional rollout filter. In debug mode, defaults to "
+            f"{DEFAULT_ROLLOUT_ID}; in --embodiment mode, omitted means all rollouts."
+        ),
+    )
     parser.add_argument("--ego-agents", nargs="+", default=list(DEFAULT_EGO_AGENTS))
     parser.add_argument("--third-view-cameras", nargs="*", default=None)
-    parser.add_argument("--max-episodes", type=int, default=2)
-    parser.add_argument("--max-steps", type=int, default=300)
+    parser.add_argument(
+        "--max-episodes",
+        type=int,
+        default=None,
+        help=(
+            "Optional episode cap. Debug mode defaults to "
+            f"{DEFAULT_DEBUG_MAX_EPISODES}; --embodiment and manifest modes default to no cap."
+        ),
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help=(
+            "Optional per-episode timestep cap. Debug mode defaults to "
+            f"{DEFAULT_DEBUG_MAX_STEPS}; --embodiment and manifest modes default to no cap."
+        ),
+    )
     parser.add_argument("--fps", type=float, default=None, help="Optional fixed output FPS/downsample rate.")
     parser.add_argument("--image-width", type=int, default=None)
     parser.add_argument("--image-height", type=int, default=None)
     parser.add_argument("--action-type", choices=["cmd_vel"], default="cmd_vel")
     parser.add_argument("--state-version", choices=["v1"], default="v1")
-    parser.add_argument("--split", default="train")
+    parser.add_argument("--split", default=None, help="Optional split override; otherwise source split is preserved.")
     parser.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -982,27 +1189,58 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     dataset_root = args.dataset_root.expanduser()
-    if args.manifest:
-        entries = read_manifest_jsonl(args.manifest.expanduser(), dataset_root)
-    else:
-        entries = build_default_manifest_entries(
-            dataset_root=dataset_root,
-            scene_id=args.scene_id,
-            rollout_id=args.rollout_id,
-            ego_agents=args.ego_agents,
-            third_view_cameras=args.third_view_cameras,
-            split=args.split,
+    try:
+        if args.manifest and args.embodiment:
+            raise ValueError("--manifest and --embodiment are mutually exclusive")
+        if args.manifest:
+            entries = read_manifest_jsonl(args.manifest.expanduser(), dataset_root)
+        elif args.embodiment:
+            metadata = _load_release_metadata(dataset_root.resolve())
+            entries = build_embodiment_manifest_entries(
+                dataset_root=dataset_root,
+                embodiment=args.embodiment,
+                rollouts=metadata["rollouts"],
+                third_view_cameras=args.third_view_cameras,
+                split_override=args.split,
+                scene_id=args.scene_id,
+                rollout_id=args.rollout_id,
+            )
+        else:
+            entries = build_default_manifest_entries(
+                dataset_root=dataset_root,
+                scene_id=args.scene_id if args.scene_id is not None else DEFAULT_SCENE_ID,
+                rollout_id=args.rollout_id if args.rollout_id is not None else DEFAULT_ROLLOUT_ID,
+                ego_agents=args.ego_agents,
+                third_view_cameras=args.third_view_cameras,
+                split=args.split or "train",
+            )
+
+        debug_default_mode = args.manifest is None and args.embodiment is None
+        max_episodes = args.max_episodes
+        max_steps = args.max_steps
+        if debug_default_mode:
+            if max_episodes is None:
+                max_episodes = DEFAULT_DEBUG_MAX_EPISODES
+            if max_steps is None:
+                max_steps = DEFAULT_DEBUG_MAX_STEPS
+    except (FileExistsError, FileNotFoundError, KeyError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        summary = convert_dataset(
+            entries,
+            args.out_root,
+            max_episodes=max_episodes,
+            max_steps=max_steps,
+            requested_fps=args.fps,
+            image_width=args.image_width,
+            image_height=args.image_height,
+            overwrite=args.overwrite,
         )
-    summary = convert_dataset(
-        entries,
-        args.out_root,
-        max_episodes=args.max_episodes,
-        max_steps=args.max_steps,
-        requested_fps=args.fps,
-        image_width=args.image_width,
-        image_height=args.image_height,
-        overwrite=args.overwrite,
-    )
+    except (FileExistsError, FileNotFoundError, KeyError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

@@ -71,8 +71,8 @@ frame and includes `rgb_path_in_tar`, `depth_path_in_tar`, timestamp, camera
 metadata, and nearest recorded robot pose and command velocity for robot camera
 rows.
 
-The DreamZero debug converter treats this packaged release as the preferred
-manifest source. It must not modify the packaged release.
+The DreamZero converter treats this packaged release as the preferred manifest
+source. It must not modify the packaged release.
 
 ## Camera Names
 
@@ -105,8 +105,8 @@ The original capture timestamp is preserved as `source_timestamp_ns`, and
 source frame.
 
 The converter only emits rows whose selected ego camera and selected third-view
-cameras exist at the same source timestamp. For v1 debug conversion, optional
-downsampling selects a monotonic subsequence near the requested output FPS.
+cameras exist at the same source timestamp. Optional downsampling selects a
+monotonic subsequence near the requested output FPS.
 
 ## Pose Frame Convention
 
@@ -183,6 +183,29 @@ only when no teammate sample is available yet or when the slot is empty.
 names observed in the selected conversion set. The mapping is written to
 `meta/isaac_vln_debug.json`.
 
+For GEAR/DreamZero metadata, the v1 converter emits the controlled ego robot's
+model id as the dataset embodiment tag, for example `nova_carter`, `carter_v1`,
+`jackal`, or `limo`. One LeRobot/GEAR output folder must contain exactly one
+controlled ego embodiment. Other robots may still appear in shared third-view
+cameras and team state, but they are not the action target for that dataset.
+
+## Conversion Modes
+
+The converter supports two v1 selection modes:
+
+- Debug mode, used when `--embodiment` and `--manifest` are omitted. It keeps
+  small defaults: scene `1`, rollout `3`, ego agent `nova_carter`, maximum `2`
+  episodes, and maximum `300` timesteps.
+- Embodiment mode, used with `--embodiment <robot_id>`. It enumerates every
+  packaged successful rollout containing that robot model/name and converts one
+  per-rollout ego episode for that controlled embodiment. By default this mode
+  has no episode or timestep cap; `--scene-id`, `--rollout-id`,
+  `--max-episodes`, and `--max-steps` are optional filters/caps for local
+  debugging or sharding.
+
+Manifest JSONL mode remains available for explicit hand-picked entries. It also
+defaults to no episode or timestep cap unless those flags are provided.
+
 ## Split Convention
 
 The packaged release currently contains `split == "train"` rows. The converter
@@ -238,9 +261,9 @@ action_v1:
 Future action chunks are produced by DreamZero `action.delta_indices` during
 training, not packed into each parquet row.
 
-## LeRobot Debug Output
+## LeRobot Output
 
-The debug converter writes a LeRobot-style folder:
+The converter writes a LeRobot-style folder:
 
 ```text
 isaac_vln_lerobot/
@@ -271,4 +294,4 @@ Required parquet columns are:
   `source_timestamp_ns`
 
 The converter writes RGB MP4 videos only. Depth is intentionally out of scope for
-debug v1.
+v1.

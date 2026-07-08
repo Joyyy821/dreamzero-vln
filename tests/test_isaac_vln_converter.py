@@ -9,12 +9,17 @@ import pandas as pd
 from isaac_vln.data.convert_manifest_to_lerobot import (
     _build_robot_timelines,
     _common_timestamps,
+    _robot_embodiment_tag,
     _sample_robot_timeline,
+    _single_embodiment_tag,
+    available_embodiments_from_rollouts,
+    build_embodiment_manifest_entries,
     build_default_manifest_entries,
     pack_action_v1,
     pack_state_v1,
     read_manifest_jsonl,
     relative_pose_body,
+    select_timestamps,
     stable_team_names,
     state_key_slices,
     wrap_to_pi,
@@ -88,6 +93,11 @@ class IsaacVlnConverterTest(unittest.TestCase):
             {"ego": [0, 2], "goal": [2, 5], "team": [5, 19]},
         )
 
+    def test_select_timestamps_can_be_uncapped(self):
+        timestamps = [10, 20, 30]
+        self.assertEqual(select_timestamps(timestamps, fps=None, max_steps=None), timestamps)
+        self.assertEqual(select_timestamps(timestamps, fps=None, max_steps=2), [10, 20])
+
     def test_episode_timestamps_do_not_require_team_rows(self):
         frames = pd.DataFrame(
             [
@@ -108,6 +118,77 @@ class IsaacVlnConverterTest(unittest.TestCase):
         self.assertEqual(held["x"], 5)
         self.assertEqual(held["vx"], 0.0)
         self.assertEqual(held["wz"], 0.0)
+
+    def test_embodiment_tag_uses_robot_model_and_rejects_mixed_outputs(self):
+        self.assertEqual(
+            _robot_embodiment_tag({"name": "robot_0", "model": "nova_carter"}, "robot_0"),
+            "nova_carter",
+        )
+        self.assertEqual(_robot_embodiment_tag({"name": "jackal"}, "jackal"), "jackal")
+        self.assertEqual(_single_embodiment_tag(["nova_carter", "nova_carter"]), "nova_carter")
+        with self.assertRaisesRegex(ValueError, "one controlled ego embodiment"):
+            _single_embodiment_tag(["nova_carter", "carter_v1"])
+
+    def test_build_embodiment_manifest_entries_filters_release_rollouts(self):
+        rollouts = pd.DataFrame(
+            [
+                {
+                    "scene_id": 1,
+                    "rollout_id": 1,
+                    "split": "train",
+                    "robot_names": json.dumps(["nova_carter", "jackal"]),
+                    "robot_models": json.dumps(["nova_carter", "jackal"]),
+                    "success": True,
+                    "package_status": "packaged",
+                },
+                {
+                    "scene_id": 1,
+                    "rollout_id": 2,
+                    "split": "val",
+                    "robot_names": json.dumps(["carter_v1"]),
+                    "robot_models": json.dumps(["carter_v1"]),
+                    "success": True,
+                    "package_status": "packaged",
+                },
+                {
+                    "scene_id": 2,
+                    "rollout_id": 1,
+                    "split": "train",
+                    "robot_names": json.dumps(["nova_carter"]),
+                    "robot_models": json.dumps(["nova_carter"]),
+                    "success": False,
+                    "package_status": "packaged",
+                },
+            ]
+        )
+        self.assertEqual(
+            available_embodiments_from_rollouts(rollouts),
+            ["carter_v1", "jackal", "nova_carter"],
+        )
+        entries = build_embodiment_manifest_entries(
+            dataset_root=Path("/tmp/dataset"),
+            embodiment="nova_carter",
+            rollouts=rollouts,
+            third_view_cameras=["half_north"],
+            split_override=None,
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].scene_id, 1)
+        self.assertEqual(entries[0].rollout_id, 1)
+        self.assertEqual(entries[0].ego_agent, "nova_carter")
+        self.assertEqual(entries[0].split, "train")
+        self.assertEqual(entries[0].third_view_cameras, ("half_north",))
+
+        entries = build_embodiment_manifest_entries(
+            dataset_root=Path("/tmp/dataset"),
+            embodiment="nova_carter",
+            rollouts=rollouts,
+            third_view_cameras=None,
+            split_override="debug",
+            scene_id=1,
+            rollout_id=1,
+        )
+        self.assertEqual([(entry.ego_agent, entry.split) for entry in entries], [("nova_carter", "debug")])
 
     def test_manifest_defaults_and_jsonl_expansion(self):
         root = Path("/tmp/dataset")
