@@ -21,6 +21,12 @@ import pandas as pd
 import yaml
 from PIL import Image
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - fallback for minimal local envs.
+    def tqdm(iterable, **_: Any):
+        return iterable
+
 
 DEFAULT_DATASET_ROOT = Path("/home/yjiao/Datasets/ma_vln_isaac_sim_hf")
 DEFAULT_SCENE_ID = 1
@@ -255,20 +261,29 @@ def build_embodiment_manifest_entries(
     third_view_cameras: Sequence[str] | None,
     split_override: str | None,
     scene_id: int | None = None,
+    scene_ids: Sequence[int] | None = None,
+    exclude_scene_ids: Sequence[int] | None = None,
     rollout_id: int | None = None,
 ) -> list[ManifestEntry]:
     """Build one per-ego entry for every packaged rollout containing an embodiment."""
     embodiment = str(embodiment).strip()
     if not embodiment:
         raise ValueError("--embodiment must be non-empty")
+    include_scenes = _resolve_scene_filter(scene_id=scene_id, scene_ids=scene_ids)
+    exclude_scenes = _normalize_int_set(exclude_scene_ids)
+    overlap = include_scenes & exclude_scenes
+    if overlap:
+        raise ValueError(f"Scene ids cannot be both included and excluded: {sorted(overlap)}")
 
     rows = rollouts.copy()
     if "success" in rows.columns:
         rows = rows[rows["success"].astype(bool)]
     if "package_status" in rows.columns:
         rows = rows[rows["package_status"].astype(str) == "packaged"]
-    if scene_id is not None:
-        rows = rows[rows["scene_id"] == int(scene_id)]
+    if include_scenes:
+        rows = rows[rows["scene_id"].isin(include_scenes)]
+    if exclude_scenes:
+        rows = rows[~rows["scene_id"].isin(exclude_scenes)]
     if rollout_id is not None:
         rows = rows[rows["rollout_id"] == int(rollout_id)]
     rows = rows.sort_values(["scene_id", "rollout_id"], kind="stable")
@@ -312,6 +327,28 @@ def available_embodiments_from_rollouts(rollouts: pd.DataFrame) -> list[str]:
             if str(value):
                 embodiments.add(str(value))
     return sorted(embodiments)
+
+
+def _resolve_scene_filter(
+    *,
+    scene_id: int | None,
+    scene_ids: Sequence[int] | None,
+) -> set[int]:
+    if scene_id is not None and scene_ids:
+        raise ValueError("--scene-id and --scene-ids are mutually exclusive")
+    if scene_id is not None:
+        return {int(scene_id)}
+    return _normalize_int_set(scene_ids)
+
+
+def _normalize_int_set(values: Sequence[int] | None) -> set[int]:
+    if not values:
+        return set()
+    normalized = {int(value) for value in values}
+    invalid = sorted(value for value in normalized if value <= 0)
+    if invalid:
+        raise ValueError(f"Scene ids must be positive integers, got {invalid}")
+    return normalized
 
 
 def convert_dataset(
@@ -358,7 +395,7 @@ def convert_dataset(
     all_results: list[EpisodeResult] = []
     global_row_index = 0
 
-    for episode_index, entry in enumerate(entries):
+    for episode_index, entry in enumerate(tqdm(entries, desc="Converting episodes", unit="episode")):
         result = _build_episode(
             entry,
             episode_index=episode_index,
@@ -1148,6 +1185,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--scene-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional list of scene ids to include in --embodiment mode, "
+            "for example --scene-ids 1 2 3 6 7 8."
+        ),
+    )
+    parser.add_argument(
+        "--exclude-scene-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional list of scene ids to exclude in --embodiment mode.",
+    )
+    parser.add_argument(
         "--rollout-id",
         type=int,
         default=None,
@@ -1192,6 +1246,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.manifest and args.embodiment:
             raise ValueError("--manifest and --embodiment are mutually exclusive")
+        if (args.scene_ids or args.exclude_scene_ids) and not args.embodiment:
+            raise ValueError("--scene-ids and --exclude-scene-ids require --embodiment")
         if args.manifest:
             entries = read_manifest_jsonl(args.manifest.expanduser(), dataset_root)
         elif args.embodiment:
@@ -1203,6 +1259,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 third_view_cameras=args.third_view_cameras,
                 split_override=args.split,
                 scene_id=args.scene_id,
+                scene_ids=args.scene_ids,
+                exclude_scene_ids=args.exclude_scene_ids,
                 rollout_id=args.rollout_id,
             )
         else:

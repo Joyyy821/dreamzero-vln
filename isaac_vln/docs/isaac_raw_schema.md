@@ -199,9 +199,9 @@ The converter supports two v1 selection modes:
 - Embodiment mode, used with `--embodiment <robot_id>`. It enumerates every
   packaged successful rollout containing that robot model/name and converts one
   per-rollout ego episode for that controlled embodiment. By default this mode
-  has no episode or timestep cap; `--scene-id`, `--rollout-id`,
-  `--max-episodes`, and `--max-steps` are optional filters/caps for local
-  debugging or sharding.
+  has no episode or timestep cap; `--scene-id`, `--scene-ids`,
+  `--exclude-scene-ids`, `--rollout-id`, `--max-episodes`, and `--max-steps`
+  are optional filters/caps for local debugging, splitting, or sharding.
 
 Manifest JSONL mode remains available for explicit hand-picked entries. It also
 defaults to no episode or timestep cap unless those flags are provided.

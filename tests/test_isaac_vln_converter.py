@@ -190,6 +190,73 @@ class IsaacVlnConverterTest(unittest.TestCase):
         )
         self.assertEqual([(entry.ego_agent, entry.split) for entry in entries], [("nova_carter", "debug")])
 
+    def test_build_embodiment_manifest_entries_scene_list_filters(self):
+        rollouts = pd.DataFrame(
+            [
+                {
+                    "scene_id": scene_id,
+                    "rollout_id": 1,
+                    "split": "train",
+                    "robot_names": json.dumps(["nova_carter"]),
+                    "robot_models": json.dumps(["nova_carter"]),
+                    "success": True,
+                    "package_status": "packaged",
+                }
+                for scene_id in (1, 2, 3)
+            ]
+        )
+        root = Path("/tmp/dataset")
+        entries = build_embodiment_manifest_entries(
+            dataset_root=root,
+            embodiment="nova_carter",
+            rollouts=rollouts,
+            third_view_cameras=None,
+            split_override=None,
+            scene_ids=[1, 3],
+        )
+        self.assertEqual([entry.scene_id for entry in entries], [1, 3])
+
+        entries = build_embodiment_manifest_entries(
+            dataset_root=root,
+            embodiment="nova_carter",
+            rollouts=rollouts,
+            third_view_cameras=None,
+            split_override=None,
+            exclude_scene_ids=[3],
+        )
+        self.assertEqual([entry.scene_id for entry in entries], [1, 2])
+
+        entries = build_embodiment_manifest_entries(
+            dataset_root=root,
+            embodiment="nova_carter",
+            rollouts=rollouts,
+            third_view_cameras=None,
+            split_override=None,
+            scene_id=2,
+        )
+        self.assertEqual([entry.scene_id for entry in entries], [2])
+
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            build_embodiment_manifest_entries(
+                dataset_root=root,
+                embodiment="nova_carter",
+                rollouts=rollouts,
+                third_view_cameras=None,
+                split_override=None,
+                scene_id=1,
+                scene_ids=[1, 2],
+            )
+        with self.assertRaisesRegex(ValueError, "both included and excluded"):
+            build_embodiment_manifest_entries(
+                dataset_root=root,
+                embodiment="nova_carter",
+                rollouts=rollouts,
+                third_view_cameras=None,
+                split_override=None,
+                scene_ids=[1, 2],
+                exclude_scene_ids=[2],
+            )
+
     def test_manifest_defaults_and_jsonl_expansion(self):
         root = Path("/tmp/dataset")
         defaults = build_default_manifest_entries(

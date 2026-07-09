@@ -1,0 +1,212 @@
+# Isaac VLN Data Conversion
+
+This folder contains the MAS-VLN Isaac Sim to LeRobot/GEAR conversion tools used
+for DreamZero fine-tuning. V1 is RGB-only and one controlled ego embodiment per
+output dataset.
+
+## Expected Input
+
+Use the packaged MAS-VLN HF-style release as input:
+
+```text
+/home/yjiao/Datasets/ma_vln_isaac_sim_hf/
+  metadata/
+    rollouts.parquet
+    frames.parquet
+  rollouts/scene_XXX/
+    rollout_YYY.tar
+  scenes/scene_XXX/
+    ...
+```
+
+`rollouts.parquet` and `frames.parquet` drive selection and frame indexing.
+`run_config.yaml` inside each rollout tar is used for the robot list, goal
+poses, and language instruction. The converter does not modify this source
+dataset.
+
+## Isaac To LeRobot
+
+Convert all successful packaged `nova_carter` ego episodes:
+
+```bash
+python isaac_vln/data/convert_manifest_to_lerobot.py \
+  --dataset-root /home/yjiao/Datasets/ma_vln_isaac_sim_hf \
+  --out-root ./datasets/nova_carter_lerobot_train \
+  --embodiment nova_carter \
+  --scene-ids 1 2 3 6 7 8 11 12 13 16 17 18 21 22 23 \
+  --split train \
+  --overwrite
+```
+
+The converter shows a `Converting episodes` progress bar. Omit `--max-episodes`
+and `--max-steps` for full conversion. Use those flags only for smoke tests.
+
+For a tiny smoke test:
+
+```bash
+python isaac_vln/data/convert_manifest_to_lerobot.py \
+  --dataset-root /home/yjiao/Datasets/ma_vln_isaac_sim_hf \
+  --out-root /tmp/isaac_debug/nova_carter_smoke \
+  --embodiment nova_carter \
+  --scene-ids 1 2 \
+  --max-episodes 2 \
+  --max-steps 20 \
+  --overwrite
+```
+
+Expected LeRobot output:
+
+```text
+nova_carter_lerobot_train/
+  data/chunk-000/
+    episode_000000.parquet
+    ...
+  videos/chunk-000/
+    observation.images.ego_front/
+      episode_000000.mp4
+    observation.images.third_view_0/
+      episode_000000.mp4
+    observation.images.third_view_1/
+      episode_000000.mp4
+  meta/
+    info.json
+    tasks.jsonl
+    episodes.jsonl
+    isaac_vln_debug.json
+```
+
+## State And Action
+
+Each parquet row stores one packed `observation.state` and one packed `action`.
+The source global `map` poses are used internally, but global `x/y/yaw` are not
+stored directly as the training state.
+
+```text
+state_v1:
+  ego:
+    v                  # recorded vx
+    omega              # recorded wz
+  goal:
+    dx_goal_body       # goal relative to ego, ego body frame
+    dy_goal_body
+    dtheta_goal
+  team:
+    repeated team slots:
+      valid_mask       # 1 when this slot contains a real teammate, else 0
+      dx_body          # teammate relative to ego, ego body frame
+      dy_body
+      dtheta
+      v                # teammate recorded vx
+      omega            # teammate recorded wz
+      agent_type_id
+
+action_v1:
+  cmd_vx
+  cmd_wz
+```
+
+For the stratified `nova_carter` split below, all train/val/test roots include
+up to four total robots, so the state/action GEAR slices are:
+
+```bash
+--state-keys '{"ego": [0, 2], "goal": [2, 5], "team": [5, 26]}'
+--action-keys '{"cmd_vel": [0, 2]}'
+```
+
+Always check `<lerobot_root>/meta/isaac_vln_debug.json` for the exact
+`gear_command_hint` before running the GEAR converter.
+
+## Train/Val/Test Split
+
+`convert_lerobot_to_gear.py` does not split datasets. It converts every episode
+under one LeRobot root into GEAR metadata. Create separate LeRobot roots for
+train/val/test first, then run the GEAR converter separately on each root.
+
+The current scenes are organized as five scene templates with five randomized
+scenes per template:
+
+```text
+template_0: scenes 1-5
+template_1: scenes 6-10
+template_2: scenes 11-15
+template_3: scenes 16-20
+template_4: scenes 21-25
+```
+
+For the first single-agent `nova_carter` policy, use a stratified split so every
+template, including the unique-object final template, appears in train/val/test:
+
+```text
+train: scenes 1 2 3 6 7 8 11 12 13 16 17 18 21 22 23
+val:   scenes 4 9 14 19 24
+test:  scenes 5 10 15 20 25
+```
+
+Commands:
+
+```bash
+# Train
+python isaac_vln/data/convert_manifest_to_lerobot.py \
+  --dataset-root /home/yjiao/Datasets/ma_vln_isaac_sim_hf \
+  --out-root ./datasets/nova_carter_lerobot_train \
+  --embodiment nova_carter \
+  --scene-ids 1 2 3 6 7 8 11 12 13 16 17 18 21 22 23 \
+  --split train \
+  --overwrite
+
+# Val
+python isaac_vln/data/convert_manifest_to_lerobot.py \
+  --dataset-root /home/yjiao/Datasets/ma_vln_isaac_sim_hf \
+  --out-root ./datasets/nova_carter_lerobot_val \
+  --embodiment nova_carter \
+  --scene-ids 4 9 14 19 24 \
+  --split val \
+  --overwrite
+
+# Test
+python isaac_vln/data/convert_manifest_to_lerobot.py \
+  --dataset-root /home/yjiao/Datasets/ma_vln_isaac_sim_hf \
+  --out-root ./datasets/nova_carter_lerobot_test \
+  --embodiment nova_carter \
+  --scene-ids 5 10 15 20 25 \
+  --split test \
+  --overwrite
+
+# For the very first version of stablizing training loop and 
+# no testing involves
+# Train
+python isaac_vln/data/convert_manifest_to_lerobot.py \
+  --dataset-root /home/yjiao/Datasets/ma_vln_isaac_sim_hf \
+  --out-root ./datasets/nova_carter_lerobot_train \
+  --embodiment nova_carter \
+  --scene-ids 1 2 3 4 6 7 8 9 11 12 13 14 16 17 18 19 21 22 23 24 \
+  --split train \
+  --overwrite
+
+# Val
+python isaac_vln/data/convert_manifest_to_lerobot.py \
+  --dataset-root /home/yjiao/Datasets/ma_vln_isaac_sim_hf \
+  --out-root ./datasets/nova_carter_lerobot_val \
+  --embodiment nova_carter \
+  --scene-ids 5 10 15 20 25 \
+  --split val \
+  --overwrite
+```
+
+## LeRobot To GEAR
+
+Run GEAR conversion separately per split root:
+
+```bash
+python scripts/data/convert_lerobot_to_gear.py \
+  --dataset-path ./datasets/nova_carter_lerobot_train \
+  --embodiment-tag nova_carter \
+  --state-keys '{"ego": [0, 2], "goal": [2, 5], "team": [5, 26]}' \
+  --action-keys '{"cmd_vel": [0, 2]}' \
+  --task-key annotation.task \
+  --force
+```
+
+Repeat for `nova_carter_lerobot_val` and `nova_carter_lerobot_test` if you want
+GEAR metadata for evaluation roots. Do not pass `--relative-action-keys` for V1;
+the action is absolute commanded velocity `[cmd_vx, cmd_wz]`.
