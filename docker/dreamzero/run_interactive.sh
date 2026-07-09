@@ -6,7 +6,7 @@ IMAGE_TAG=${IMAGE_TAG:-latest}
 
 # Host paths
 HOST_WORKSPACE=${HOST_WORKSPACE:-$HOME/workspace}
-HOST_DATA_ROOT=${HOST_DATA_ROOT:-/data/$USER/dream-mapf}
+HOST_DATA_ROOT=${HOST_DATA_ROOT:-/data/$USER}
 
 # Container paths
 CONTAINER_WORKSPACE=/workspace
