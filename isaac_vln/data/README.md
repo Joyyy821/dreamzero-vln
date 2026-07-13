@@ -210,3 +210,106 @@ python scripts/data/convert_lerobot_to_gear.py \
 Repeat for `nova_carter_lerobot_val` and `nova_carter_lerobot_test` if you want
 GEAR metadata for evaluation roots. Do not pass `--relative-action-keys` for V1;
 the action is absolute commanded velocity `[cmd_vx, cmd_wz]`.
+
+## DreamZero Model-Side Setup
+
+The LeRobot and GEAR converters only prepare data files and metadata. A new
+DreamZero embodiment also needs model-side registration before training.
+
+For `nova_carter`, check that these pieces exist:
+
+- `groot/vla/data/schema/embodiment_tags.py` has `NOVA_CARTER = "nova_carter"`.
+- `groot/vla/configs/model/dreamzero/transform/base.yaml` maps
+  `nova_carter` to a projector id.
+- `groot/vla/model/dreamzero/transform/dreamzero_cotrain.py` handles the
+  `NOVA_CARTER` language prompt and view layout.
+- `groot/vla/configs/data/dreamzero/base_48_wan_fine_aug_relative.yaml`
+  defines `modality_config_nova_carter`, `transform_nova_carter`, and
+  `fps.nova_carter: 10`.
+- `groot/vla/configs/data/dreamzero/nova_carter.yaml` uses
+  `relative_action: false`, `relative_action_keys: []`, and points
+  `dataset_path.nova_carter` at `${nova_carter_data_root}`.
+
+The expected Nova Carter view order is:
+
+```text
+modality_config_nova_carter.video.modality_keys:
+  - video.ego_front
+  - video.third_view_0
+  - video.third_view_1
+
+DreamZero packed canvas:
+  [ego_front    | third_view_1]
+  [third_view_0 | black]
+```
+
+The canvas packing happens during training, not during conversion. The MP4 files
+remain normal per-camera videos.
+
+## Training Resolution And `frame_seqlen`
+
+`image_resolution_width` and `image_resolution_height` are per-view resize
+settings in the DreamZero data transform. For Nova Carter, the transform packs
+three views into a 2x2 canvas, so the model sees a canvas with doubled width and
+height.
+
+For the Wan2.1 14B action head, `frame_seqlen` is the number of latent patch
+tokens per frame:
+
+```text
+canvas_width = 2 * image_resolution_width
+canvas_height = 2 * image_resolution_height
+frame_seqlen = (canvas_width / 16) * (canvas_height / 16)
+```
+
+Common settings:
+
+```text
+320x176 per view -> 640x352 canvas -> frame_seqlen = 40 * 22 = 880
+224x224 per view -> 448x448 canvas -> frame_seqlen = 28 * 28 = 784
+```
+
+If you keep the native Isaac camera resolution at `224x224`, use
+`frame_seqlen=784` in the training script. If you switch to the existing
+DreamZero rectangular setting `320x176`, use `frame_seqlen=880`.
+
+## Training Launch
+
+Run training against the GEAR-converted train root. The GEAR converter writes
+metadata into the same dataset root, so the directory name may still include
+`lerobot`, but it must contain files such as:
+
+```text
+meta/embodiment.json
+meta/modality.json
+meta/stats.json
+meta/tasks.jsonl
+meta/episodes.jsonl
+```
+
+If running inside Docker, `DATA_ROOT` must be the path visible inside the
+container:
+
+```bash
+DATA_ROOT=/data/datasets/mas-vln-lerobot/nova_carter_lerobot_train \
+  bash scripts/train/nova_carter_training.sh
+```
+
+Extra Hydra overrides can be passed after the script name:
+
+```bash
+DATA_ROOT=/data/datasets/mas-vln-lerobot/nova_carter_lerobot_train \
+  bash scripts/train/nova_carter_training.sh max_steps=1000 save_steps=500
+```
+
+The first V1 run should use the available DreamZero checkpoint:
+
+```bash
+hf download GEAR-Dreams/DreamZero-AgiBot \
+  --repo-type model \
+  --local-dir ./checkpoints/DreamZero-AgiBot
+```
+
+This checkpoint is used as the LoRA fine-tuning initialization. It is not
+Nova-Carter-specific, but it is the current DreamZero pretrained policy
+checkpoint expected by `scripts/train/nova_carter_training.sh`.

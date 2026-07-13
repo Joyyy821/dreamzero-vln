@@ -35,6 +35,20 @@ def whitespace_clean(text):
     return text
 
 
+def _format_nova_carter_prompt(instruction: str) -> str:
+    """Describe Isaac VLN's ego/front plus shared third-view camera layout."""
+    instruction = instruction.lower()
+    return (
+        "A multi-view video shows that a Nova Carter mobile robot "
+        + instruction
+        + " The video is split into four views: The top-left view shows the robot front camera, "
+        + "the top-right view shows the second shared third-person camera, "
+        + "the bottom-left view shows the first shared third-person camera, "
+        + "and the bottom-right view is a black screen. The robot "
+        + instruction
+    )
+
+
 class HuggingfaceTokenizer:
 
     def __init__(self, name, seq_len=None, clean=None, **kwargs):
@@ -124,6 +138,8 @@ def collate(features: List[dict], tokenizer: AutoTokenizer, num_views=3, embodim
                         processed_item = "A multi-view video shows that a robot " + processed_item.lower() + " The video is split into four views: The top-left view shows the camera view from the robot's head, the top-right view shows the camera view from the right hand, the bottom-left view shows the camera view from the left hand, and the bottom-right view is a black screen (inactive view). The robot " + processed_item.lower()
                     elif elem["embodiment_id"] == embodiment_tag_mapping[EmbodimentTag.YAM.value]:
                         processed_item = "A multi-view video shows that a robot " + processed_item.lower() + " The video is split into four views: The top-left view shows the top camera, the top-right view shows the right camera, the bottom-left view shows the left camera, and the bottom-right view is a black screen. The robot " + processed_item.lower()
+                    elif elem["embodiment_id"] == embodiment_tag_mapping[EmbodimentTag.NOVA_CARTER.value]:
+                        processed_item = _format_nova_carter_prompt(processed_item)
                     else:
                         raise ValueError(f"Embodiment ID {elem['embodiment_id']} not supported.") 
                     output_values.append(processed_item)  
@@ -146,6 +162,8 @@ def collate(features: List[dict], tokenizer: AutoTokenizer, num_views=3, embodim
                         item = "A multi-view video shows that a robot " + str(item).lower() + " The video is split into four views: The top-left view shows the camera view from the robot's head, the top-right view shows the camera view from the right hand, the bottom-left view shows the camera view from the left hand, and the bottom-right view is a black screen (inactive view). The robot " + str(item).lower()
                     elif elem["embodiment_id"] == embodiment_tag_mapping[EmbodimentTag.YAM.value]:
                         item = "A multi-view video shows that a robot " + str(item).lower() + " The video is split into four views: The top-left view shows the top camera, the top-right view shows the right camera, the bottom-left view shows the left camera, and the bottom-right view is a black screen. The robot " + str(item).lower()
+                    elif elem["embodiment_id"] == embodiment_tag_mapping[EmbodimentTag.NOVA_CARTER.value]:
+                        item = _format_nova_carter_prompt(str(item))
                     else:
                         raise ValueError(f"Embodiment ID {elem['embodiment_id']} not supported.")   
                     output_values.append(item)
@@ -352,6 +370,16 @@ class DreamTransform(InvertibleModalityTransform):
                 # if drop_exterior_idx != 1:
                 concat_images[0, :, :, h:, w:] = right_exterior
 
+                return concat_images
+
+            if self.embodiment_tag == EmbodimentTag.NOVA_CARTER and v >= 3:
+                # Keep this layout aligned with modality_config_nova_carter:
+                # [ego_front | third_view_1]
+                # [third_view_0 | black]
+                concat_images = np.zeros((1, t, c, 2 * h, 2 * w), dtype=images.dtype)
+                concat_images[0, :, :, :h, :w] = images[0]
+                concat_images[0, :, :, h:, :w] = images[1]
+                concat_images[0, :, :, :h, w:] = images[2]
                 return concat_images
             
             # For other embodiments: use 2x2 grid layout
@@ -627,4 +655,3 @@ class DreamTransform(InvertibleModalityTransform):
 
     def __call__(self, data: dict) -> dict:
         return self.apply(data)
-

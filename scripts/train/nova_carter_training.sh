@@ -2,7 +2,9 @@
 export HYDRA_FULL_ERROR=1
 
 # ============ CONFIGURATION ============
-DATA_ROOT=${DATA_ROOT:?"Set DATA_ROOT to your GEAR-converted dataset"}
+# DATA_ROOT is the GEAR-converted dataset root as seen from the runtime
+# environment. When training inside Docker, use the container-mounted path.
+DATA_ROOT=${DATA_ROOT:-"/data/datasets/mas-vln-lerobot/nova_carter_lerobot_train"}
 OUTPUT_DIR=${OUTPUT_DIR:-"./checkpoints/dreamzero_nova_carter_lora"}
 
 if [ -z "${NUM_GPUS:-}" ]; then
@@ -31,6 +33,8 @@ if [ ! -f "$DATA_ROOT/meta/embodiment.json" ]; then
     exit 1
 fi
 
+# Nova Carter packs three 224x224 views into a 448x448 2x2 canvas; Wan2.1 VAE
+# plus patch embedding gives 28*28 = 784 tokens per frame.
 torchrun --nproc_per_node $NUM_GPUS --standalone \
     groot/vla/experiment/experiment.py \
     report_to=wandb \
@@ -66,7 +70,7 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     image_resolution_height=224 \
     save_lora_only=true \
     max_chunk_size=4 \
-    frame_seqlen=880 \
+    frame_seqlen=784 \
     save_strategy=steps \
     nova_carter_data_root=$DATA_ROOT \
     dit_version=$WAN_CKPT_DIR \
@@ -76,4 +80,5 @@ torchrun --nproc_per_node $NUM_GPUS --standalone \
     tokenizer_path=$TOKENIZER_DIR \
     pretrained_model_path=./checkpoints/DreamZero-AgiBot \
     ++action_head_cfg.config.skip_component_loading=true \
-    ++action_head_cfg.config.defer_lora_injection=true
+    ++action_head_cfg.config.defer_lora_injection=true \
+    "$@"
