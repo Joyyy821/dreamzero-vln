@@ -288,9 +288,22 @@ meta/episodes.jsonl
 ```
 
 If running inside Docker, `DATA_ROOT` must be the path visible inside the
-container:
+container. Set `NUM_GPUS` explicitly if `nvidia-smi` is not visible from the
+container shell or if you want to pin the number of ranks:
 
 ```bash
+DATA_ROOT=/data/datasets/mas-vln-lerobot/nova_carter_lerobot_train \
+NUM_GPUS=8 \
+  bash scripts/train/nova_carter_training.sh
+```
+
+The training script auto-detects the repo root from its own path, exports that
+path on `PYTHONPATH`, and runs from the repo root so `groot` imports work inside
+Docker even when the package is not pip-installed. If the repo is mounted at a
+nonstandard path, set `DREAMZERO_ROOT` to the container-visible repo root:
+
+```bash
+DREAMZERO_ROOT=/workspace/dreamzero-vln \
 DATA_ROOT=/data/datasets/mas-vln-lerobot/nova_carter_lerobot_train \
   bash scripts/train/nova_carter_training.sh
 ```
