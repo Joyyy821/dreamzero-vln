@@ -1,0 +1,15 @@
+.git/
+.agents/
+.codex/
+.cache/
+.venv/
+.pytest_cache/
+checkpoints/
+datasets/
+outputs/
+runs/
+wandb/
+debug_image/
+**/__pycache__/
+**/*.pyc
+*.egg-info/

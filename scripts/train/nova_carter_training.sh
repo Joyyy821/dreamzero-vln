@@ -32,6 +32,25 @@ if [ ! -f "$DATA_ROOT/meta/embodiment.json" ]; then
     echo "ERROR: meta/embodiment.json missing — run convert_lerobot_to_gear.py first"
     exit 1
 fi
+if ! mkdir -p "$OUTPUT_DIR" 2>/dev/null || [ ! -w "$OUTPUT_DIR" ]; then
+    echo "ERROR: Output directory is not writable: $OUTPUT_DIR"
+    echo "Fix the directory ownership on the host, or rerun with OUTPUT_DIR=/data/checkpoints/<new-run-name>."
+    exit 1
+fi
+if [ "${HF_HOME:-}" = "/data/cache/huggingface" ]; then
+    HF_HOME="/data/cache/hf_home"
+fi
+HF_HOME=${HF_HOME:-"/data/cache/hf_home"}
+HF_HUB_CACHE=${HF_HUB_CACHE:-"/data/cache/hf_hub"}
+HF_XET_CACHE=${HF_XET_CACHE:-"/data/cache/hf_xet"}
+export HF_HOME HF_HUB_CACHE HF_XET_CACHE
+for CACHE_DIR in "$HF_HOME" "$HF_HUB_CACHE" "$HF_XET_CACHE"; do
+    if ! mkdir -p "$CACHE_DIR" 2>/dev/null || [ ! -w "$CACHE_DIR" ]; then
+        echo "ERROR: Cache directory is not writable: $CACHE_DIR"
+        echo "Relaunch Docker with docker/dreamzero/run_interactive.sh, or choose a fresh writable cache path."
+        exit 1
+    fi
+done
 
 # Nova Carter packs three 224x224 views into a 448x448 2x2 canvas; Wan2.1 VAE
 # plus patch embedding gives 28*28 = 784 tokens per frame.
